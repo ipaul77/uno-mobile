@@ -92,6 +92,12 @@
         .card-drop { animation: smash 0.25s cubic-bezier(0.2, 1, 0.3, 1); }
         @keyframes drawToMe { 0% { transform: translate(0, -250px) scale(0.4) rotate(180deg); opacity: 0; } 100% { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; } }
         .card-draw { animation: drawToMe 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes flyIn {
+            0% { transform: scale(1.4) translate(-50px, 150px) rotate(-35deg); opacity: 0; filter: blur(1px); }
+            70% { transform: scale(0.95) translate(5px, -5px) rotate(5deg); opacity: 1; filter: none; }
+            100% { transform: scale(1) translate(0, 0) rotate(0deg); opacity: 1; }
+        }
+        .card-fly { animation: flyIn 0.35s cubic-bezier(0.19, 1, 0.22, 1) forwards; }
 
         .play-area-grid { display: grid; grid-template-columns: 80px 1fr 80px; grid-template-rows: 90px 1fr auto; width: 100%; flex-grow: 1; padding-top: 50px; box-sizing: border-box; }
 
@@ -279,6 +285,7 @@
         let myNickname = '';
         
         let currentBotInput = 1;
+        let lastTopCardId = null;
 
         const lobbyBGM = new Audio('https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3');
         lobbyBGM.loop = true;
@@ -359,50 +366,46 @@
             const now = audioCtx.currentTime;
             
             if (type === 'play') {
-                // 1. 카드가 테이블 펠트에 닿는 초기의 가볍고 날카로운 접촉 마찰음 (카드 끝 테두리 접촉)
-                const clickOsc = audioCtx.createOscillator();
-                const clickGain = audioCtx.createGain();
-                clickOsc.type = 'sine';
-                clickOsc.frequency.setValueAtTime(1500, now);
-                clickOsc.frequency.exponentialRampToValueAtTime(800, now + 0.015);
-                clickGain.gain.setValueAtTime(0.06, now);
-                clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.015);
-                clickOsc.connect(clickGain);
-                clickGain.connect(audioCtx.destination);
-                clickOsc.start(now);
-                clickOsc.stop(now + 0.015);
-
-                // 2. 카드가 펠트 바닥에 떨어질 때 나는 둔탁하고 낮은 저음 (부드러운 타격음)
-                const osc = audioCtx.createOscillator();
-                const oscGain = audioCtx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(150, now);
-                osc.frequency.exponentialRampToValueAtTime(70, now + 0.1);
-                oscGain.gain.setValueAtTime(0.28, now);
-                oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-                osc.connect(oscGain);
-                oscGain.connect(audioCtx.destination);
-                osc.start(now);
-                osc.stop(now + 0.1);
-
-                // 3. 카드가 테이블 위를 미끄러질 때 발생하는 부드러운 종이 마찰음 (슬라이드 효과)
+                // 1. 카드가 모서리부터 스르륵 미끄러지며 들어오는 고품격 종이 쓸림음 (스르륵 소리 합성)
                 const noise = audioCtx.createBufferSource();
                 const noiseBuffer = createNoiseBuffer();
                 if (noiseBuffer) {
                     noise.buffer = noiseBuffer;
-                    const noiseFilter = audioCtx.createBiquadFilter();
-                    noiseFilter.type = 'bandpass';
-                    noiseFilter.frequency.setValueAtTime(900, now);
-                    noiseFilter.frequency.exponentialRampToValueAtTime(350, now + 0.15);
-                    noiseFilter.Q.value = 2.0; 
                     
-                    const noiseGain = audioCtx.createGain();
-                    noiseGain.gain.setValueAtTime(0.18, now);
-                    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                    // 주 주파수 대역: 종이가 펠트 위를 부드럽게 미끄러지며 내는 중음역대 마찰음 (1200Hz -> 550Hz)
+                    const bpFilter = audioCtx.createBiquadFilter();
+                    bpFilter.type = 'bandpass';
+                    bpFilter.frequency.setValueAtTime(1200, now);
+                    bpFilter.frequency.exponentialRampToValueAtTime(550, now + 0.18);
+                    bpFilter.Q.value = 3.0; // 좁은 대역폭으로 맑은 마찰감 형성
                     
-                    noise.connect(noiseFilter);
-                    noiseFilter.connect(noiseGain);
-                    noiseGain.connect(audioCtx.destination);
+                    // 보조 주파수 대역: 카드가 손가락이나 카드 장수끼리 쓸리는 가벼운 초고음역 사각거림 (2600Hz -> 1400Hz)
+                    const hpFilter = audioCtx.createBiquadFilter();
+                    hpFilter.type = 'highpass';
+                    hpFilter.frequency.setValueAtTime(2600, now);
+                    hpFilter.frequency.exponentialRampToValueAtTime(1400, now + 0.14);
+                    
+                    // 메인 볼륨 엔벨로프 (매우 부드러운 시작과 페이드아웃)
+                    const mainGain = audioCtx.createGain();
+                    mainGain.gain.setValueAtTime(0.20, now);
+                    mainGain.gain.exponentialRampToValueAtTime(0.001, now + 0.20);
+                    
+                    // 신호 믹싱 비율 설정
+                    const bpGain = audioCtx.createGain();
+                    bpGain.gain.value = 0.85; // 중저음 쓸림 85%
+                    const hpGain = audioCtx.createGain();
+                    hpGain.gain.value = 0.15; // 고음 사각거림 15%
+                    
+                    // 각 필터로 노이즈 분기 및 결합
+                    noise.connect(bpFilter);
+                    bpFilter.connect(bpGain);
+                    bpGain.connect(mainGain);
+                    
+                    noise.connect(hpFilter);
+                    hpFilter.connect(hpGain);
+                    hpGain.connect(mainGain);
+                    
+                    mainGain.connect(audioCtx.destination);
                     noise.start(now);
                 }
             } else if (type === 'draw') {
@@ -676,7 +679,14 @@
             }
 
             const topCardContainer = document.getElementById('top-card'); topCardContainer.innerHTML = '';
-            topCardContainer.appendChild(createCardDOM(state.topCard, false, ''));
+            
+            // 탑 카드가 변경되었는지 확인하여 부드럽게 날아오는 슬라이드 애니메이션 트리거
+            const currentTopCardId = state.topCard ? `${state.topCard.color}-${state.topCard.value}` : '';
+            const isNewCard = lastTopCardId !== null && lastTopCardId !== currentTopCardId;
+            lastTopCardId = currentTopCardId;
+            
+            const flyClass = isNewCard ? 'card-fly' : '';
+            topCardContainer.appendChild(createCardDOM(state.topCard, false, flyClass));
 
             isMyTurn = (state.currentTurnId === socket.id);
             const turnText = document.getElementById('my-turn-text');
